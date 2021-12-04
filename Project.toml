@@ -1,0 +1,4 @@
+name = "PythonPkg"
+uuid = "692fbb30-8f1a-473e-a714-725a2909945e"
+authors = ["Christopher Doris <github.com/cjdoris>"]
+version = "0.1.0"
