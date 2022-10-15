@@ -1,0 +1,13 @@
+name = "PythonPkg"
+uuid = "1099a963-58cb-4669-9e3e-0b30eb315a15"
+authors = ["Christopher Doris <github.com/cjdoris> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
