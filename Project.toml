@@ -3,6 +3,11 @@ uuid = "1099a963-58cb-4669-9e3e-0b30eb315a15"
 authors = ["Christopher Doris <github.com/cjdoris> and contributors"]
 version = "0.1.0"
 
+[deps]
+Conda = "8f4d0f93-b110-5947-807f-2305c1781a2d"
+MicroMamba = "0b3b1443-0f03-428d-bdfb-f27f9c1191ea"
+Scratch = "6c6a2e73-6563-6170-7368-637461726353"
+
 [compat]
 julia = "1"
 
