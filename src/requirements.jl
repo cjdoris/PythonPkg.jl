@@ -1,47 +1,81 @@
-struct Source
-    mod::Module
-    file::String
-    line::Int
+# These are organised by spec.name => package => spec.
+# The package identifies the Julia package which added the spec.
+# If the package adds another spec with the same name, it is replaced.
+const _python_requirements = Dict{String,Dict{Base.PkgId,PythonPackageSpec}}()
+const _conda_requirements = Dict{String,Dict{Base.PkgId,CondaPackageSpec}}()
+const _conda_channel_requirements = Dict{String,Dict{Base.PkgId,CondaChannelSpec}}()
+
+function _require(requirements, pkg, spec, delete)
+    reqs = get!(valtype(requirements), requirements, spec.name)
+    if delete
+        delete!(reqs, pkg)
+        if isempty(reqs)
+            delete!(requirements, spec.name)
+        end
+    else
+        reqs[pkg] = spec
+    end
+    return
 end
 
-struct Requirement{T}
-    source::Source
-    spec::T
+function _require_nothing(requirements, pkg)
+    for (name, reqs) in collect(requirements)
+        delete!(reqs, pkg)
+        if isempty(reqs)
+            delete!(requirements, name)
+        end
+    end
 end
 
-const PythonReq = Requirement{PythonPackageSpec}
-const CondaReq = Requirement{CondaPackageSpec}
-const CondaChannelReq = Requirement{CondaChannelSpec}
-
-const _requirements = PythonReq[]
-const _conda_requirements = CondaReq[]
-const _conda_channel_requirements = CondaChannelReq[]
-
-function require(source, name; kw...)
+function require(pkg, name; delete=false, kw...)
+    pkg = _pkg_id(pkg)
     spec = PythonPackageSpec(name; kw...)
-    req = Requirement(source, spec)
-    @lock _global_lock push!(_requirements, req)
-    @lock(_global_lock, _config.auto_resolve) && resolve(; again=true)
+    @lock _global_lock begin
+        _init()
+        _require(_python_requirements, pkg, spec, delete)
+        _config.resolved = false
+        _config.auto_resolve && _resolve()
+    end
     return
 end
 
-function require_conda(source, name; kw...)
+function require_conda(pkg, name; delete=false, kw...)
+    pkg = _pkg_id(pkg)
     spec = CondaPackageSpec(name; kw...)
-    req = Requirement(source, spec)
-    @lock _global_lock push!(_conda_requirements, req)
-    @lock(_global_lock, _config.auto_resolve) && resolve(; again=true)
+    @lock _global_lock begin
+        _init()
+        _require(_conda_requirements, pkg, spec, delete)
+        _config.resolved = false
+        _config.auto_resolve && _resolve()
+    end
     return
 end
 
-function require_conda_channel(source, name; kw...)
+function require_conda_channels(pkg, name; delete, kw...)
+    pkg = _pkg_id(pkg)
     spec = CondaChannelSpec(name; kw...)
-    req = Requirement(source, spec)
-    @lock _global_lock push!(_conda_channel_requirements, req)
+    @lock _global_lock begin
+        _init()
+        _require(_conda_channel_requirements, pkg, spec, delete)
+    end
     return
 end
 
-function _require_macro(f, inargs, mod, src)
-    source = Source(mod, String(src.file), src.line)
+function require_nothing(pkg)
+    pkg = _pkg_id(pkg)
+    @lock _global_lock begin
+        _require_nothing(_python_requirements, pkg)
+        _require_nothing(_conda_requirements, pkg)
+        _require_nothing(_conda_channel_requirements, pkg)
+    end
+    return
+end
+
+_pkg_id(m::Module) = Base.PkgId(m)
+_pkg_id(x::Base.PkgId) = x
+
+function _require_macro(f, inargs, mod)
+    pkg = _pkg_id(mod)
     args = []
     params = []
     for arg in inargs
@@ -53,18 +87,23 @@ function _require_macro(f, inargs, mod, src)
             push!(args, arg)
         end
     end
-    ans = :($f($source, $(args...); $(params...)))
+    ans = :($f($pkg, $(args...); $(params...)))
     return esc(ans)
 end
 
 macro require(args...)
-    _require_macro(require, args, __module__, __source__)
+    _require_macro(require, args, __module__)
 end
 
 macro require_conda(args...)
-    _require_macro(require_conda, args, __module__, __source__)
+    _require_macro(require_conda, args, __module__)
 end
 
 macro require_conda_channel(args...)
-    _require_macro(require_conda_channel, args, __module__, __source__)
+    _require_macro(require_conda_channel, args, __module__)
+end
+
+macro require_nothing()
+    pkg = _pkg_id(__module__)
+    esc(:($require_nothing($pkg)))
 end
