@@ -9,6 +9,7 @@ MicroMamba = "0b3b1443-0f03-428d-bdfb-f27f9c1191ea"
 Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 
 [compat]
+Conda = "1"
 julia = "1"
 
 [extras]
