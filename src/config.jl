@@ -18,6 +18,41 @@ const _config = Config(false, :none, "", :none, "", :none, "", false, false, fal
 #     init()
 # end
 
+function _default_env_conda_python(env, conda, python)
+    _config.pycall_compat = false
+    env != "" && return (env, conda, python)
+    conda != "" && return ("@ProjectConda", conda, python)
+    python != "" && return ("@ProjectVEnv", conda, python)
+    # compatibility with PyCall - if PyCall is in the project, 
+    pycallpath = Base.locate_package(_PKGID_PYCALL)
+    pycallpath === nothing && return ("@ProjectConda", conda, python)
+    pycallconda = nothing
+    pycallpython = nothing
+    for line in eachline(joinpath(pycallpath, "..", "..", "deps", "deps.jl"))
+        ex = Meta.parse(line)
+        ex isa Expr || continue
+        ex.head == :const || continue
+        ex = ex.args[1]
+        ex isa Expr || continue
+        ex.head == :(=) || continue
+        k, v = ex.args
+        if k === :python && v isa String
+            pycallpython = v
+        elseif k === :conda && v isa Bool
+            pycallconda = v
+        end
+    end
+    @assert pycallconda isa Bool
+    @assert pycallpython isa String
+    @assert !startswith(pycallpython, "@")
+    _config.pycall_compat = true
+    if pycallconda::Bool
+        return ("@Conda.jl", "", "")
+    else
+        return ("@System", "", pycallpython::String)
+    end
+end
+
 function init(; kw...)
     @lock _global_lock _init(; kw...)
 end
@@ -35,24 +70,8 @@ function _init(; force::Bool=false)
     conda = get(ENV, "JULIA_PYTHONPKG_CONDA", "")
     python = get(ENV, "JULIA_PYTHONPKG_PYTHON", "")
 
-    # If PyCall (and Conda) are both used in some active project, enable PyCall compat mode.
-    # The only impact of this mode is to change the default env_mode to Conda.jl.
-    pycall_compat = any(proj -> _project_depends_on(proj, _PKGID_PYCALL) && _project_depends_on(proj, _PKGID_CONDA), Base.load_path())
-    _config.pycall_compat = false
-
-    # default env_mode
-    if env == ""
-        if conda != ""
-            env = "@ProjectConda"
-        elseif python != ""
-            env = "@ProjectVEnv"
-        elseif pycall_compat
-            _config.pycall_compat = true
-            env = "@Conda.jl"
-        else
-            env = "@ProjectConda"
-        end
-    end
+    # set some defaults
+    env, conda, python = _default_env_conda_python(env, conda, python)
 
     # env_mode and env_path
     if env == "@Conda.jl"
@@ -241,4 +260,38 @@ function activate!(args...)
         _resolve()
         _activate!(args...)
     end
+end
+
+function _which(prog)
+    _init()
+    _resolve()
+    oldpath = get(ENV, "PATH", nothing)
+    delete!(ENV, "PATH")
+    try
+        _activate!() do 
+            return Sys.which(prog)
+        end
+    finally
+        if oldpath === nothing
+            delete!(ENV, "PATH")
+        else
+            ENV["PATH"] = oldpath
+        end
+    end
+end
+
+which(prog) = @lock _global_lock _which(prog)
+
+function _setenv(cmd::Cmd; check::Bool=true)
+    if check && _which(cmd[1]) === nothing
+        error("$(cmd[1]) was not found in the environment")
+    end
+    env = _activate!(copy(ENV))
+    Base.setenv(cmd, env)
+end
+
+setenv(cmd; kw...) = @lock _global_lock _setenv(cmd; kw...)
+
+function run(cmd::Cmd; kw...)
+    Base.run(setenv(cmd; kw...))
 end

@@ -1,12 +1,12 @@
-function resolve(; kw...)
+function resolve(; interactive=isinteractive(), kw...)
     @lock _global_lock begin
         _init()
-        _resolve(; kw...)
+        _resolve(; interactive, kw...)
     end
 end
 
 function _resolve(;
-    interactive::Bool=isinteractive(),
+    interactive::Bool=false,
     force::Bool=false,
     dry_run::Bool=false,
 )
@@ -29,6 +29,10 @@ function _resolve(;
         _config.resolved = true
         return
     end
+    # if we have python packages to install, we'll need pip
+    if !isempty(_python_requirements) && _using_conda()
+        _require(_conda_requirements, _PKGID, CondaPackageSpec("pip", version=">=22", channel="conda-forge"))
+    end
     # if each requirement is already installed, then skip
     old_meta = _meta_read()
     if old_meta !== nothing
@@ -47,8 +51,8 @@ function _resolve(;
             for (pkg, spec) in reqs
         )
     else
-        all_python_specs_resolved = isempty(_python_requirements)
-        all_conda_specs_resolved = isempty(_conda_requirements)
+        all_python_specs_resolved = false
+        all_conda_specs_resolved = false
     end
     if all_python_specs_resolved && all_conda_specs_resolved && !force
         interactive && @info "PythonPkg: Nothing to do: Requirements already installed."
@@ -63,10 +67,6 @@ function _resolve(;
     python_specs = [_merge_python_specs(values(reqs)) for reqs in values(_python_requirements) if !isempty(reqs)]
     conda_specs = unique!([spec for reqs in values(_conda_requirements) for spec in values(reqs)])
     conda_channels = unique!([spec for reqs in values(_conda_channel_requirements) for spec in values(reqs)])
-    # if we have python packages to install, we'll need pip
-    if !isempty(python_specs) && _using_conda()
-        push!(conda_specs, CondaPackageSpec("pip", version=">=22", channel="conda-forge"))
-    end
     # assume conda-forge if no channels are specified
     if isempty(conda_channels)
         push!(conda_channels, CondaChannelSpec("conda-forge"))
@@ -78,11 +78,13 @@ function _resolve(;
     mode = _config.env_mode
     mkpath(_config.env_path)
     # install conda requirements
-    if !isempty(conda_specs) && (force || !all_conda_specs_resolved)
+    if force || !all_conda_specs_resolved
         args = _conda_args(conda_specs, channels=conda_channels)
         push!(args, "-y", "--override-channels", "--no-channel-priority")
         if mode ∈ (:conda_jl, :active_conda)
-            _conda_run(`install $args`)
+            if !isempty(conda_specs)
+                _conda_run(`install $args`)
+            end
         elseif mode ∈ (:project_conda,)
             rm(_config.env_path, force=true, recursive=true)
             _conda_run(`create $args`)
@@ -165,10 +167,10 @@ function _conda_run(args)
             _conda_jl().runconda(args, env)
         elseif mode == :system
             exe = _config.conda_path
-            run(`$exe -p $env $args`)
+            Base.run(`$exe -p $env $args`)
         elseif mode == :micromamba_jl
-            cmd = _micromamba_jl().cmd(`-p $env $args`)
-            run(cmd)
+            cmd = Base.invokelatest(_micromamba_jl().cmd, `-p $env $args`)::Cmd
+            Base.run(cmd)
         else
             error("not implemented")
         end
@@ -186,7 +188,7 @@ function _pip_run(args)
             _conda_jl().pip(args[1], args[2:end], env)
         else
             _activate!() do 
-                run(`pip $args`)
+                Base.run(`pip $args`)
             end
         end
     else

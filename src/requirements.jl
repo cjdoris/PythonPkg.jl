@@ -5,7 +5,7 @@ const _python_requirements = Dict{String,Dict{Base.PkgId,PythonPackageSpec}}()
 const _conda_requirements = Dict{String,Dict{Base.PkgId,CondaPackageSpec}}()
 const _conda_channel_requirements = Dict{String,Dict{Base.PkgId,CondaChannelSpec}}()
 
-function _require(requirements, pkg, spec, delete)
+function _require(requirements, pkg, spec; delete=false)
     reqs = get!(valtype(requirements), requirements, spec.name)
     if delete
         delete!(reqs, pkg)
@@ -32,7 +32,7 @@ function require(pkg, name; delete=false, kw...)
     spec = PythonPackageSpec(name; kw...)
     @lock _global_lock begin
         _init()
-        _require(_python_requirements, pkg, spec, delete)
+        _require(_python_requirements, pkg, spec; delete)
         _config.resolved = false
         _config.auto_resolve && _resolve()
     end
@@ -44,7 +44,7 @@ function require_conda(pkg, name; delete=false, kw...)
     spec = CondaPackageSpec(name; kw...)
     @lock _global_lock begin
         _init()
-        _require(_conda_requirements, pkg, spec, delete)
+        _require(_conda_requirements, pkg, spec; delete)
         _config.resolved = false
         _config.auto_resolve && _resolve()
     end
@@ -56,7 +56,7 @@ function require_conda_channels(pkg, name; delete, kw...)
     spec = CondaChannelSpec(name; kw...)
     @lock _global_lock begin
         _init()
-        _require(_conda_channel_requirements, pkg, spec, delete)
+        _require(_conda_channel_requirements, pkg, spec; delete)
     end
     return
 end

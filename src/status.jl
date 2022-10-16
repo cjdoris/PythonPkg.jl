@@ -11,12 +11,20 @@ function _status(; io::IO=stdout)
     printstyled(io, " ", _config.env_path)
     printstyled(io, " (", _config.env_mode, ")", color=:light_black)
     println(io)
-    if !_config.resolved
-        printstyled(io, "Not resolved. These packages are not available yet.", color=:yellow)
+    if _config.pycall_compat
+        printstyled(io, "PyCall compatibility mode.", color=:yellow)
+        if _config.conda_mode == :conda_jl
+            printstyled(io, " Using Conda.jl global environment.", color=:yellow)
+        else
+            printstyled(io, " Using Python $(_config.python_path).", color=:yellow)
+        end
         println(io)
     end
-    if _config.pycall_compat
-        printstyled(io, "PyCall compatibility mode. Using Conda.jl global environment.", color=:yellow)
+    if _config.env_mode == :System
+        printstyled(io, "Using system environment, no packages will be installed.", color=:yellow)
+    end
+    if !_config.resolved
+        printstyled(io, "Not resolved. These packages are not available yet.", color=:yellow)
         println(io)
     end
     _status_section(io, "Python Packages", _python_requirements)

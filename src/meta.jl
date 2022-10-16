@@ -73,7 +73,7 @@ function _meta_write(io::IO, x::Base.PkgId)
         write(io, false)
     else
         write(io, true)
-        write(io, x.uuid)
+        _meta_write(io, x.uuid)
     end
 end
 
@@ -81,11 +81,19 @@ function _meta_read(io::IO, ::Type{Base.PkgId})
     name = _meta_read(io, String)
     has_uuid = read(io, Bool)
     if has_uuid
-        uuid = read(io, Base.UUID)
+        uuid = _meta_read(io, Base.UUID)
     else
         uuid = nothing
     end
     Base.PkgId(uuid, name)
+end
+
+function _meta_write(io::IO, x::Base.UUID)
+    write(io, x.value::UInt128)
+end
+
+function _meta_read(io::IO, ::Type{Base.UUID})
+    Base.UUID(read(io, UInt128))
 end
 
 function _meta_write(io::IO, x::PythonPackageSpec)
