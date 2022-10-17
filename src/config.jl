@@ -1,34 +1,52 @@
 mutable struct Config
+    # state flags
     inited::Bool
-    env_mode::Symbol  # none, system, conda_jl, active_conda, active_venv, project_conda, project_venv
-    env_path::String
-    conda_mode::Symbol  # system, conda_jl, micromamba_jl
-    conda_path::String
-    python_mode::Symbol # system, python_jll_jl
-    python_path::String
     resolved::Bool
     auto_resolve::Bool
+    # modes of operation
+    env_mode::Symbol  # none, system, conda_jl, active_conda, active_venv, project_conda, project_venv
+    conda_mode::Symbol  # system, conda_jl, micromamba_jl
+    python_mode::Symbol # system, python_jll_jl
     pycall_compat::Bool
+    # paths of things for creating the env
+    env_path::String
     meta_path::String
+    conda_path::String
+    python_path::String
+    # derived information about the env
+    pycall_deps::Dict{Symbol,Any}
 end
 
-const _config = Config(false, :none, "", :none, "", :none, "", false, false, false, "")
+const _config = Config(false, false, false, :none, :none, :none, false, "", "", "", "", Dict{Symbol,Any}())
+
+function Base.show(io::IO, ::MIME"text/plain", c::Config)
+    show(io, typeof(c))
+    print(io, ":")
+    for k in fieldnames(Config)
+        println(io)
+        print(io, "  ", k, " = ")
+        show(io, MIME("text/plain"), getfield(c, k))
+    end
+end
 
 # function __init__()
 #     init()
 # end
 
-function _default_env_conda_python(env, conda, python)
+function _init_pycall_compat(env, conda, python)
     _config.pycall_compat = false
-    env != "" && return (env, conda, python)
-    conda != "" && return ("@ProjectConda", conda, python)
-    python != "" && return ("@ProjectVEnv", conda, python)
-    # compatibility with PyCall - if PyCall is in the project, 
-    pycallpath = Base.locate_package(_PKGID_PYCALL)
-    pycallpath === nothing && return ("@ProjectConda", conda, python)
-    pycallconda = nothing
-    pycallpython = nothing
-    for line in eachline(joinpath(pycallpath, "..", "..", "deps", "deps.jl"))
+    empty!(_config.pycall_deps)
+    # if any env var is set, then we're not in compat mode
+    if env != "" || conda != "" || python != ""
+        return
+    end
+    # if PyCall is not in the project, we're not in compat mode
+    path = Base.locate_package(_PKGID_PYCALL)
+    if path === nothing
+        return
+    end
+    # parse PyCall/deps/deps.jl file
+    for line in eachline(joinpath(path, "..", "..", "deps", "deps.jl"))
         ex = Meta.parse(line)
         ex isa Expr || continue
         ex.head == :const || continue
@@ -36,21 +54,10 @@ function _default_env_conda_python(env, conda, python)
         ex isa Expr || continue
         ex.head == :(=) || continue
         k, v = ex.args
-        if k === :python && v isa String
-            pycallpython = v
-        elseif k === :conda && v isa Bool
-            pycallconda = v
-        end
+        k isa Symbol || continue
+        _config.pycall_deps[k] = v
     end
-    @assert pycallconda isa Bool
-    @assert pycallpython isa String
-    @assert !startswith(pycallpython, "@")
     _config.pycall_compat = true
-    if pycallconda::Bool
-        return ("@Conda.jl", "", "")
-    else
-        return ("@System", "", pycallpython::String)
-    end
 end
 
 function init(; kw...)
@@ -70,8 +77,25 @@ function _init(; force::Bool=false)
     conda = get(ENV, "JULIA_PYTHONPKG_CONDA", "")
     python = get(ENV, "JULIA_PYTHONPKG_PYTHON", "")
 
-    # set some defaults
-    env, conda, python = _default_env_conda_python(env, conda, python)
+    # pycall_compat
+    _init_pycall_compat(env, conda, python)
+
+    # default env_mode
+    if env == ""
+        if conda != ""
+            env = "@ProjectConda"
+        elseif python != ""
+            env = "@ProjectVEnv"
+        elseif _config.pycall_compat
+            if _config.pycall_deps[:conda]::Bool
+                env = "@Conda.jl"
+            else
+                env = "@System"
+            end
+        else
+            env = "@ProjectConda"
+        end
+    end
 
     # env_mode and env_path
     if env == "@Conda.jl"
@@ -221,6 +245,7 @@ function _activate!(env::AbstractDict=ENV)
         if old_path !== ""
             new_path = string(new_path, path_sep, old_path)
         end
+        delete!(env, "PYTHONHOME")
         env["PATH"] = new_path
         env["CONDA_PREFIX"] = root
         env["CONDA_DEFAULT_ENV"] = root
@@ -283,8 +308,18 @@ end
 which(prog) = @lock _global_lock _which(prog)
 
 function _setenv(cmd::Cmd; check::Bool=true)
-    if check && _which(cmd[1]) === nothing
-        error("$(cmd[1]) was not found in the environment")
+    if check
+        if cmd[1] == "python"
+            exe = _which_python()
+        else
+            exe = _which(cmd[1])
+        end
+        if exe === nothing
+            error("$(cmd[1]) was not found in the environment")
+        end
+        # hacky way to make a copy of cmd and change the first entry
+        cmd = Base.addenv(cmd)
+        cmd.exec[1] = exe
     end
     env = _activate!(copy(ENV))
     Base.setenv(cmd, env)
@@ -294,4 +329,63 @@ setenv(cmd; kw...) = @lock _global_lock _setenv(cmd; kw...)
 
 function run(cmd::Cmd; kw...)
     Base.run(setenv(cmd; kw...))
+end
+
+function _which_python()
+    if _config.pycall_compat
+        exe = get(ENV, "PYCALL_JL_RUNTIME_PYTHON", "")
+        if exe != ""
+            return exe
+        else
+            return _config.pycall_deps[:pyprogramname]::String
+        end
+    elseif _config.env_mode == :System
+        exe = _config.python_path
+        if exe != ""
+            return exe
+        end
+        exe = get(ENV, "PYTHON", "")
+        if exe != ""
+            return exe
+        end
+    end
+    for what in ("python", "python3")
+        exe = PythonPkg._which(what)
+        if exe !== nothing
+            return exe
+        end
+    end
+    return nothing
+end
+
+function which_python()
+    @lock _global_lock begin
+        _init()
+        _resolve()
+        _which_python()
+    end
+end
+
+function _which_python_home()
+    if _config.pycall_compat
+        exe = get(ENV, "PYCALL_JL_RUNTIME_PYTHONHOME", "")
+        if exe != ""
+            return exe
+        else
+            return _config.pycall_deps[:PYTHONHOME]::String
+        end
+    elseif _config.env_mode == :System
+        exe = get(ENV, "PYTHONHOME", "")
+        if exe != ""
+            return exe
+        end
+    end
+end
+
+function which_python_home()
+    @lock _global_lock begin
+        _init()
+        _resolve()
+        _which_python_home()
+    end
 end
