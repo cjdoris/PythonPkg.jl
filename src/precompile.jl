@@ -1,0 +1,8 @@
+init()
+@require("foo")
+@require("foo", version="")
+@require("foo", binary="")
+@require("foo", version="", binary="")
+resolve(dry_run=true, interactive=false)
+status(io=devnull)
+@require_nothing()
